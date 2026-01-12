@@ -59,5 +59,17 @@ class MeasureFst(GraphFst):
             + pynutil.delete("}")
         )
         graph = (graph_cardinal | graph_decimal) + delete_space + pynutil.insert(" ") + unit
+
+        # Handle address verbalization
+        preserve_order = pynutil.delete("preserve_order:") + delete_space + pynutil.delete("true") + delete_space
+        address = (
+            pynutil.delete("units: \"address\"")
+            + delete_space
+            + graph_cardinal
+            + delete_space
+            + pynini.closure(preserve_order)
+        )
+        graph |= address
+
         delete_tokens = self.delete_tokens(graph)
         self.fst = delete_tokens.optimize()

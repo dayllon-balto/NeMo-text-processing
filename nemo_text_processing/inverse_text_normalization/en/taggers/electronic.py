@@ -58,9 +58,20 @@ class ElectronicFst(GraphFst):
         alternative_dot = (
             pynini.closure(delete_extra_space, 0, 1) + pynini.accep(".") + pynini.closure(delete_extra_space, 0, 1)
         )
-        username = (alpha_num + pynini.closure(delete_extra_space + accepted_username)) | pynutil.add_weight(
+
+        # Original pattern: single letters with spaces (e.g., "c d f one")
+        username_spelled = (alpha_num + pynini.closure(delete_extra_space + accepted_username)) | pynutil.add_weight(
             pynini.closure(NEMO_ALPHA, 1), weight=0.0001
         )
+
+        # New pattern: full words with dots (e.g., "david dot ayllon")
+        # A word is a sequence of letters
+        word = pynini.closure(NEMO_ALPHA, 1)
+        # Username can be word, or word dot word, etc.
+        username_words = word + pynini.closure(delete_extra_space + process_dot + delete_extra_space + word)
+
+        # Combine both patterns
+        username = username_spelled | username_words
         username = pynutil.insert("username: \"") + username + pynutil.insert("\"")
         single_alphanum = pynini.closure(alpha_num + delete_extra_space) + alpha_num
         server = (
@@ -86,7 +97,10 @@ class ElectronicFst(GraphFst):
             + domain
             + pynutil.insert("\"")
         )
-        graph = username + delete_extra_space + pynutil.delete("at") + insert_space + delete_extra_space + domain_graph
+        # Email pattern: username at domain
+        # Give it lower weight to prefer email over URL protocol matching
+        email_graph = username + delete_extra_space + pynutil.delete("at") + insert_space + delete_extra_space + domain_graph
+        graph = pynutil.add_weight(email_graph, -0.5)
 
         ############# url ###
         if input_case == INPUT_CASED:

@@ -140,6 +140,7 @@ class DateFst(GraphFst):
     Finite state transducer for classifying date,
         e.g. january fifth twenty twelve -> date { month: "january" day: "5" year: "2012" preserve_order: true }
         e.g. the fifth of january twenty twelve -> date { day: "5" month: "january" year: "2012" preserve_order: true }
+        e.g. october ten nineteen eighty four -> date { month: "october" day: "10" year: "1984" preserve_order: true }
         e.g. twenty twenty -> date { year: "2012" preserve_order: true }
 
     Args:
@@ -158,7 +159,30 @@ class DateFst(GraphFst):
 
         month_graph = pynutil.insert("month: \"") + month_graph + pynutil.insert("\"")
 
-        day_graph = pynutil.insert("day: \"") + pynutil.add_weight(ordinal_graph, -0.7) + pynutil.insert("\"")
+        # Cardinal day graph for days 1-31 (e.g., "ten" -> "10", "twenty one" -> "21")
+        # Single digits 1-9
+        cardinal_day_1_9 = graph_digit
+        # Teens 10-19
+        cardinal_day_10_19 = graph_teen
+        # 20-29 and 30-31
+        cardinal_day_20_31 = (
+            (pynini.cross("twenty", "2") | pynini.cross("thirty", "3"))
+            + (delete_space + graph_digit | pynutil.insert("0"))
+        )
+        # Constrain to valid day numbers (no 32+)
+        cardinal_day_20_31 = cardinal_day_20_31 @ (
+            pynini.accep("2") + NEMO_DIGIT  # 20-29
+            | pynini.accep("30")
+            | pynini.accep("31")
+        )
+        cardinal_day_graph = cardinal_day_1_9 | cardinal_day_10_19 | cardinal_day_20_31
+        if input_case == INPUT_CASED:
+            cardinal_day_graph = capitalized_input_graph(cardinal_day_graph)
+
+        # Day graph accepts both ordinal ("tenth") and cardinal ("ten") numbers
+        day_graph = pynutil.insert("day: \"") + pynutil.add_weight(
+            ordinal_graph | cardinal_day_graph, -0.7
+        ) + pynutil.insert("\"")
         graph_year = (
             delete_extra_space
             + pynutil.insert("year: \"")
