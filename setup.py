@@ -241,7 +241,6 @@ setuptools.setup(
     extras_require=extras_require,
     # Add in any packaged data.
     include_package_data=True,
-    exclude=['tools', 'tests', 'data'],
     package_data={'': ['*.tsv', '*.far', '*.fst']},
     zip_safe=False,
     # PyPI package information.
