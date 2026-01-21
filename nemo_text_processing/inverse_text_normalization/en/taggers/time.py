@@ -99,11 +99,28 @@ class TimeFst(GraphFst):
             )
 
         final_graph_hour = pynutil.insert("hours: \"") + graph_hour + pynutil.insert("\"")
-        graph_minute = (
+        # "o" or "oh" before single-digit minutes: "one o five" or "one oh five" -> 1:05
+        # Only allow "oh" when followed by AM/PM suffix to avoid matching "nine oh six" as time
+        delete_o = pynutil.delete("o")
+        delete_o_or_oh = pynutil.delete(pynini.union("o", "oh"))
+        if input_case == INPUT_CASED:
+            delete_o = pynutil.delete(pynini.union("o", "O"))
+            delete_o_or_oh = pynutil.delete(pynini.union("o", "oh", "O", "Oh", "OH"))
+
+        # Standard minute pattern (without "oh" - used when suffix is optional)
+        graph_minute_standard = (
             oclock + pynutil.insert("00")
-            | pynutil.delete("o") + delete_space + graph_minute_single
+            | delete_o + delete_space + pynutil.insert("0") + graph_minute_single
             | graph_minute_double
         )
+        # Minute pattern with "oh" support (used when suffix is required)
+        graph_minute_with_oh = (
+            oclock + pynutil.insert("00")
+            | delete_o_or_oh + delete_space + pynutil.insert("0") + graph_minute_single
+            | graph_minute_double
+        )
+        # Default graph_minute for backward compatibility
+        graph_minute = graph_minute_standard
         final_suffix = pynutil.insert("suffix: \"") + convert_space(suffix_graph) + pynutil.insert("\"")
         final_suffix = delete_space + insert_space + final_suffix
         final_suffix_optional = pynini.closure(final_suffix, 0, 1)
@@ -173,10 +190,22 @@ class TimeFst(GraphFst):
             + final_suffix
             + final_time_zone_optional
         )
+        # Pattern for "oh" minutes that requires suffix (e.g., "one oh five pm" -> 1:05 p.m.)
+        # This prevents "nine oh six" from being parsed as time without AM/PM
+        graph_hm_with_oh = (
+            final_graph_hour
+            + delete_extra_space
+            + pynutil.insert("minutes: \"")
+            + graph_minute_with_oh
+            + pynutil.insert("\"")
+            + final_suffix  # Required suffix for "oh" pattern
+            + final_time_zone_optional
+        )
         final_graph = (
             (graph_hm | graph_m_past_h | graph_quarter_time) + final_suffix_optional + final_time_zone_optional
         )
         final_graph |= graph_h
+        final_graph |= graph_hm_with_oh  # Add "oh" pattern with required suffix
         final_graph |= graph_m_to_h_suffix_time
 
         final_graph = self.add_tokens(final_graph.optimize())

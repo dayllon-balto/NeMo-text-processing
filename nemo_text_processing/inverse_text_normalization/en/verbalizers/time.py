@@ -71,10 +71,10 @@ class TimeFst(GraphFst):
         )
         optional_zone = pynini.closure(zone, 0, 1)
         graph = (
-            hour @ add_leading_zero_to_double_digit
+            hour  # No leading zero for hours (1:30 instead of 01:30)
             + delete_space
             + pynutil.insert(":")
-            + (minute @ add_leading_zero_to_double_digit)
+            + (minute @ add_leading_zero_to_double_digit)  # Keep leading zero for minutes
             + optional_suffix
             + optional_zone
         )

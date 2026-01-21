@@ -88,10 +88,25 @@ class DecimalFst(GraphFst):
 
         cardinal_graph = cardinal.graph_no_exception
 
-        graph_decimal = pynini.string_file(get_abs_path("data/numbers/digit.tsv"))
-        graph_decimal |= pynini.string_file(get_abs_path("data/numbers/zero.tsv")) | pynini.cross("o", "0")
+        # Single digits for fractional parts (digit-by-digit: "one three" -> "13")
+        graph_decimal_digit = pynini.string_file(get_abs_path("data/numbers/digit.tsv"))
+        graph_decimal_digit |= pynini.string_file(get_abs_path("data/numbers/zero.tsv")) | pynini.cross("o", "0")
 
-        graph_decimal = pynini.closure(graph_decimal + delete_space) + graph_decimal
+        graph_decimal = pynini.closure(graph_decimal_digit + delete_space) + graph_decimal_digit
+
+        # Also allow spoken numbers like "thirteen" -> "13", "forty five" -> "45"
+        # This handles "one point thirteen" -> "1.13"
+        graph_teen = pynini.string_file(get_abs_path("data/numbers/teen.tsv"))
+        graph_ties = pynini.string_file(get_abs_path("data/numbers/ties.tsv"))
+        # Two-digit spoken numbers: teens (11-19) or ties+digit (20-99)
+        graph_two_digit = graph_teen | (graph_ties + delete_space + (graph_decimal_digit | pynutil.insert("0")))
+
+        # Handle casing
+        casing_graph = pynini.closure(TO_LOWER | NEMO_SIGMA).optimize()
+        graph_two_digit_cased = pynini.compose(casing_graph, graph_two_digit).optimize()
+
+        # Combine: prefer digit-by-digit, but also allow spoken two-digit numbers
+        graph_decimal = graph_decimal | pynutil.add_weight(graph_two_digit_cased, 0.1)
         self.graph = graph_decimal
 
         point = pynutil.delete("point")

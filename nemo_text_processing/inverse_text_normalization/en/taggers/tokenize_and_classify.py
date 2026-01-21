@@ -26,6 +26,8 @@ from nemo_text_processing.inverse_text_normalization.en.taggers.measure import M
 from nemo_text_processing.inverse_text_normalization.en.taggers.money import MoneyFst
 from nemo_text_processing.inverse_text_normalization.en.taggers.ordinal import OrdinalFst
 from nemo_text_processing.inverse_text_normalization.en.taggers.punctuation import PunctuationFst
+from nemo_text_processing.inverse_text_normalization.en.taggers.ratio import RatioFst
+from nemo_text_processing.inverse_text_normalization.en.taggers.score import ScoreFst
 from nemo_text_processing.inverse_text_normalization.en.taggers.telephone import TelephoneFst
 from nemo_text_processing.inverse_text_normalization.en.taggers.time import TimeFst
 from nemo_text_processing.inverse_text_normalization.en.taggers.whitelist import WhiteListFst
@@ -89,6 +91,8 @@ class ClassifyFst(GraphFst):
             punct_graph = PunctuationFst().fst
             electronic_graph = ElectronicFst(input_case=input_case).fst
             telephone_graph = TelephoneFst(cardinal, input_case=input_case).fst
+            ratio_graph = RatioFst(cardinal=cardinal, input_case=input_case).fst
+            score_graph = ScoreFst(input_case=input_case).fst
 
             classify = (
                 pynutil.add_weight(whitelist_graph, 1.01)
@@ -99,6 +103,8 @@ class ClassifyFst(GraphFst):
                 | pynutil.add_weight(cardinal_graph, 1.1)
                 | pynutil.add_weight(ordinal_graph, 1.09)
                 | pynutil.add_weight(money_graph, 1.1)
+                | pynutil.add_weight(ratio_graph, 1.5)
+                | pynutil.add_weight(score_graph, 2.0)
                 | pynutil.add_weight(telephone_graph, 1.1)
                 | pynutil.add_weight(electronic_graph, 1.1)
                 | pynutil.add_weight(word_graph, 100)

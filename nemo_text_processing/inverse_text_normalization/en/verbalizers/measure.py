@@ -58,7 +58,22 @@ class MeasureFst(GraphFst):
             + delete_space
             + pynutil.delete("}")
         )
-        graph = (graph_cardinal | graph_decimal) + delete_space + pynutil.insert(" ") + unit
+
+        # Units that should not have a space before them (e.g., 64% not 64 %)
+        unit_no_space = (
+            pynutil.delete("units:")
+            + delete_space
+            + pynutil.delete("\"")
+            + pynini.accep("%")
+            + pynutil.delete("\"")
+            + delete_space
+        )
+        # Standard units with space (e.g., 12 kg)
+        graph_with_space = (graph_cardinal | graph_decimal) + delete_space + pynutil.insert(" ") + unit
+        # Percent without space (e.g., 64%)
+        graph_no_space = (graph_cardinal | graph_decimal) + delete_space + unit_no_space
+
+        graph = pynutil.add_weight(graph_no_space, -0.1) | graph_with_space
 
         # Handle address verbalization
         preserve_order = pynutil.delete("preserve_order:") + delete_space + pynutil.delete("true") + delete_space

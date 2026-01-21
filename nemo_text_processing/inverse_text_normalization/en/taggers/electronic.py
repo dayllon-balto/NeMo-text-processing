@@ -104,18 +104,55 @@ class ElectronicFst(GraphFst):
 
         ############# url ###
         if input_case == INPUT_CASED:
-            protocol_end = pynini.cross(pynini.union(*get_various_formats("www")), "www")
+            www_graph = pynini.cross(pynini.union(*get_various_formats("www")), "www")
 
-            protocol_start = pynini.cross(pynini.union(*get_various_formats("http")), "http") | pynini.cross(
+            protocol_scheme = pynini.cross(pynini.union(*get_various_formats("http")), "http") | pynini.cross(
                 pynini.union(*get_various_formats("https")), "https"
             )
         else:
-            protocol_end = pynini.cross(pynini.union("w w w", "www"), "www")
-            protocol_start = pynini.cross("h t t p", "http") | pynini.cross("h t t p s", "https")
+            www_graph = pynini.cross(pynini.union("w w w", "www"), "www")
+            protocol_scheme = pynini.cross("h t t p", "http") | pynini.cross("h t t p s", "https")
 
-        protocol_start += pynini.cross(" colon slash slash ", "://")
+        # "colon slash slash" -> "://"
+        colon_slash_slash = pynini.cross(" colon slash slash ", "://") | pynini.cross(" colon slash slash", "://")
 
-        # .com,
+        # Full protocol with scheme: "h t t p s colon slash slash" -> "https://"
+        protocol_with_scheme = protocol_scheme + colon_slash_slash
+
+        # Process "slash" -> "/" for URL paths
+        process_slash = pynini.cross("slash", "/")
+
+        # URL path segments: "slash status" -> "/status", "slash v one" -> "/v1"
+        # Each path segment must be explicitly preceded by "slash"
+        # Path patterns:
+        # 1. Single word: "status" -> "status"
+        # 2. Letter(s) + number(s): "v one" -> "v1", "v two three" -> "v23"
+        # 3. Single number: "one" -> "1"
+        path_alpha = pynini.closure(NEMO_ALPHA, 1)
+        path_num_seq = num + pynini.closure(delete_extra_space + num, 0, 3)
+        # Alphanumeric: letters followed by numbers (merged without space)
+        path_alphanum = path_alpha + delete_extra_space + path_num_seq
+        # Path component: prefer alphanum combo, then single word, then single number
+        path_component = (
+            pynutil.add_weight(path_alphanum, -0.2)  # "v one" -> "v1"
+            | pynutil.add_weight(path_num_seq, -0.1)  # "one two" -> "12"
+            | path_alpha  # "status" -> "status"
+        )
+        path_segment = (
+            delete_extra_space
+            + process_slash
+            + delete_extra_space
+            + path_component
+        )
+
+        # Domain part: handles "example dot com" -> "example.com"
+        # Also handles subdomains: "api dot example dot com" -> "api.example.com"
+        domain_part = (
+            pynini.closure(NEMO_ALPHA, 1)
+            + pynini.closure(delete_extra_space + process_dot + delete_extra_space + pynini.closure(NEMO_ALPHA, 1), 1)
+        )
+
+        # .com, ending patterns (original)
         ending = (
             delete_extra_space
             + url_symbols
@@ -136,16 +173,41 @@ class ElectronicFst(GraphFst):
             )
             + pynini.closure(ending, 1)
         ).optimize()
-        protocol = (
-            pynini.closure(protocol_start, 0, 1) + protocol_end + delete_extra_space + process_dot + protocol_default
-        ).optimize()
+
+        # URL with scheme but no www: "h t t p s colon slash slash example dot com" -> "https://example.com"
+        url_with_scheme_no_www = (
+            protocol_with_scheme
+            + delete_extra_space
+            + domain_part
+            + pynini.closure(path_segment)
+        )
+
+        # URL with www: "w w w dot example dot com" or "h t t p s colon slash slash w w w dot example dot com"
+        url_with_www = (
+            pynini.closure(protocol_with_scheme + delete_extra_space, 0, 1)
+            + www_graph
+            + delete_extra_space
+            + process_dot
+            + protocol_default
+        )
 
         if input_case == INPUT_CASED:
-            protocol |= (
-                pynini.closure(protocol_start, 0, 1) + protocol_end + alternative_dot + protocol_default
+            url_with_www |= (
+                pynini.closure(protocol_with_scheme + delete_extra_space, 0, 1)
+                + www_graph
+                + alternative_dot
+                + protocol_default
             ).optimize()
 
-        protocol |= pynini.closure(protocol_end + delete_extra_space + process_dot, 0, 1) + protocol_default
+        # URL without scheme or www (original pattern)
+        url_no_scheme = pynini.closure(www_graph + delete_extra_space + process_dot, 0, 1) + protocol_default
+
+        # Combine all URL patterns (prefer more specific patterns)
+        protocol = (
+            pynutil.add_weight(url_with_scheme_no_www, -0.5)  # Prefer full URL with scheme
+            | pynutil.add_weight(url_with_www, -0.3)  # Then URL with www
+            | url_no_scheme  # Fallback to original pattern
+        )
 
         protocol = pynutil.insert("protocol: \"") + protocol.optimize() + pynutil.insert("\"")
         graph |= protocol

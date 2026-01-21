@@ -145,12 +145,16 @@ class MeasureFst(GraphFst):
         """
         # Load number word graphs
         graph_digit = pynini.string_file(get_abs_path("data/numbers/digit.tsv"))
+        graph_zero = pynini.string_file(get_abs_path("data/numbers/zero.tsv"))
         graph_ties = pynini.string_file(get_abs_path("data/numbers/ties.tsv"))
         graph_teen = pynini.string_file(get_abs_path("data/numbers/teen.tsv"))
 
         # Handle casing for number words
         casing_graph = pynini.closure(TO_LOWER | NEMO_SIGMA).optimize()
         graph_digit_cased = pynini.compose(casing_graph, graph_digit).optimize()
+        graph_zero_cased = pynini.compose(casing_graph, graph_zero).optimize()
+        # Combined digit+zero for sequences that can include zero/oh (e.g., "five oh one" -> "501")
+        graph_digit_with_zero = pynini.compose(casing_graph, graph_digit | graph_zero).optimize()
         graph_ties_cased = pynini.compose(casing_graph, graph_ties).optimize()
         graph_teen_cased = pynini.compose(casing_graph, graph_teen).optimize()
 
@@ -164,26 +168,50 @@ class MeasureFst(GraphFst):
             | graph_two_digit_round
         )
 
+        # "hundred" keyword for 3-digit numbers
+        hundred = pynini.cross("hundred", "")
+        if input_case == INPUT_CASED:
+            hundred |= pynini.cross("Hundred", "")
+
         # Address number patterns:
         # 2-digit: "forty five" -> "45" or "fifteen" -> "15"
         # 3-digit: "one twenty three" -> "123" (single + two)
+        # 3-digit with hundred: "four hundred twenty four" -> "424"
         # 4-digit: "twelve thirty four" -> "1234" (two + two)
         # 5-digit: "nineteen one nine five" -> "19195" (teen + digits)
         address_num_2digit = graph_two_digit
+
+        # 3-digit patterns
         address_num_3digit = graph_digit_cased + delete_space + graph_two_digit
+        # "X hundred" -> "X00" (e.g., "four hundred" -> "400")
+        address_num_hundred_round = graph_digit_cased + delete_space + hundred + pynutil.insert("00")
+        # "X hundred Y" -> "X0Y" (e.g., "four hundred five" -> "405")
+        address_num_hundred_single = (
+            graph_digit_cased + delete_space + hundred + delete_space + pynutil.insert("0") + graph_digit_cased
+        )
+        # "X hundred YZ" -> "XYZ" (e.g., "four hundred twenty four" -> "424")
+        address_num_hundred_two = (
+            graph_digit_cased + delete_space + hundred + delete_space + graph_two_digit
+        )
+
         address_num_4digit = graph_two_digit + delete_space + graph_two_digit
 
         # For longer addresses (5+ digits), support digit-by-digit patterns
         # e.g., "nineteen one nine five" -> "19195" (teen + digit + digit + digit)
         # e.g., "one two three four five" -> "12345" (digit + digit + digit + digit + digit)
-        digit_seq = graph_digit_cased + pynini.closure(delete_space + graph_digit_cased, 1, 4)
+        # e.g., "five oh one" -> "501" (digit + zero/oh + digit)
+        # Use graph_digit_with_zero to support "oh" as zero in sequences
+        digit_seq = graph_digit_with_zero + pynini.closure(delete_space + graph_digit_with_zero, 1, 4)
         address_num_5digit_teen = graph_teen_cased + delete_space + digit_seq
         address_num_5digit_digits = graph_digit_cased + delete_space + digit_seq
 
         # Combine address number patterns (prefer longer matches with weights)
         address_num = (
-            pynutil.add_weight(address_num_5digit_teen, -0.4)
-            | pynutil.add_weight(address_num_5digit_digits, -0.3)
+            pynutil.add_weight(address_num_5digit_teen, -0.5)
+            | pynutil.add_weight(address_num_5digit_digits, -0.4)
+            | pynutil.add_weight(address_num_hundred_two, -0.35)  # Prefer "four hundred twenty four" -> 424
+            | pynutil.add_weight(address_num_hundred_single, -0.3)  # Prefer "four hundred five" -> 405
+            | pynutil.add_weight(address_num_hundred_round, -0.25)  # Prefer "four hundred" -> 400
             | pynutil.add_weight(address_num_4digit, -0.2)
             | pynutil.add_weight(address_num_3digit, -0.1)
             | address_num_2digit
@@ -224,8 +252,71 @@ class MeasureFst(GraphFst):
 
         street_name = short_street_names | long_street_name
 
+        # Unit/suite designations (apartment, suite, unit, etc.)
+        # Maps spoken form to abbreviation
+        unit_words = (
+            pynini.cross("apartment", "Apt")
+            | pynini.cross("suite", "Ste")
+            | pynini.cross("unit", "Unit")
+            | pynini.cross("building", "Bldg")
+            | pynini.cross("floor", "Fl")
+            | pynini.cross("room", "Rm")
+        )
+        unit_words = pynini.compose(casing_graph, unit_words).optimize()
+
+        # Unit number can be:
+        # - Just a number: "apartment ten" -> "Apt 10"
+        # - Letter + number: "apartment a ten" -> "Apt A10"
+        # - Just a letter: "apartment b" -> "Apt B"
+        # - Number + letter: "suite two a" -> "Ste 2A" (less common but possible)
+
+        # Single letter (a-z) - uppercase in output
+        single_letter = pynini.string_map([
+            ("a", "A"), ("b", "B"), ("c", "C"), ("d", "D"), ("e", "E"), ("f", "F"),
+            ("g", "G"), ("h", "H"), ("i", "I"), ("j", "J"), ("k", "K"), ("l", "L"),
+            ("m", "M"), ("n", "N"), ("o", "O"), ("p", "P"), ("q", "Q"), ("r", "R"),
+            ("s", "S"), ("t", "T"), ("u", "U"), ("v", "V"), ("w", "W"), ("x", "X"),
+            ("y", "Y"), ("z", "Z"),
+        ])
+        single_letter = pynini.compose(casing_graph, single_letter).optimize()
+
+        # Unit number patterns (using the same number graphs as address numbers)
+        # Two-digit: "ten", "twenty five"
+        unit_num_2digit = graph_two_digit
+        # Single digit for units: "five" -> "5"
+        unit_num_1digit = graph_digit_cased
+
+        unit_number = (
+            pynutil.add_weight(unit_num_2digit, -0.1)  # Prefer two-digit
+            | unit_num_1digit
+        )
+
+        # Combined unit designations:
+        # "a ten" -> "A10" (letter followed by number, no space between)
+        # "ten" -> "10" (just number)
+        # "b" -> "B" (just letter)
+        # "ten a" -> "10A" (number followed by letter)
+        unit_letter_number = single_letter + delete_space + unit_number  # "a ten" -> "A10"
+        unit_number_letter = unit_number + delete_space + single_letter  # "ten a" -> "10A"
+        unit_designation = (
+            pynutil.add_weight(unit_letter_number, -0.2)  # Prefer "a ten" -> "A10"
+            | pynutil.add_weight(unit_number_letter, -0.1)  # Then "ten a" -> "10A"
+            | unit_number  # Then just number
+            | single_letter  # Then just letter
+        )
+
+        # Full unit suffix: "apartment a ten" -> " Apt A10"
+        unit_suffix = (
+            delete_space
+            + pynutil.insert(" ")
+            + unit_words
+            + delete_space
+            + pynutil.insert(" ")
+            + unit_designation
+        )
+
         # Build the address graph:
-        # [address number] + [space] + [street name] + [space] + [address word]
+        # [address number] + [space] + [street name] + [space] + [address word] + [optional unit]
         address = (
             address_num
             + pynutil.insert(" ")
@@ -234,6 +325,7 @@ class MeasureFst(GraphFst):
             + delete_space
             + pynutil.insert(" ")
             + address_words_graph
+            + pynini.closure(unit_suffix, 0, 1)
         )
 
         return address.optimize()
